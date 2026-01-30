@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Full KDS Simulator</title>
+
+<style>
+
+/* BASE */
+
+body{
+  margin:0;
+  background:#000;
+  color:#fff;
+  font-family:Segoe UI,sans-serif;
+}
+
+button,select,input{
+  cursor:pointer;
+}
+
+.tabs{
+  display:flex;
+  background:#111;
+}
+
+.tab{
+  padding:10px 20px;
+  cursor:pointer;
+  border-bottom:3px solid transparent;
+}
+
+.tab.active{
+  border-color:#00bfff;
+  background:#222;
+}
+
+/* CONTROLS */
+
+.controls{
+  background:#222;
+  padding:8px;
+  display:flex;
+  gap:12px;
+  align-items:center;
+  flex-wrap:wrap;
+  font-size:13px;
+}
+
+
+/* BUCKETS */
+
+.bucket{
+  margin:10px;
+  padding:8px;
+  border-radius:8px;
+}
+
+.bucket h3{
+  margin:4px 0 6px;
+  font-size:14px;
+}
+
+.pending-bucket{ border:2px solid #3399ff; }
+.ready-bucket{ border:2px solid #ffcc00; }
+.active-bucket{ border:2px solid #33cc66; }
+
+
+/* CHITS */
+
+.chit{
+  background:#fff;
+  color:#000;
+  width:280px;
+  border-radius:6px;
+  padding:6px;
+  margin:6px;
+  display:inline-block;
+  vertical-align:top;
+}
+
+.high{
+  border:2px solid gold;
+}
+
+.chit-header{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  font-size:13px;
+  font-weight:bold;
+  border-bottom:1px solid #ccc;
+  margin-bottom:4px;
+}
+
+.status{
+  background:#333;
+  color:#fff;
+  font-size:11px;
+  padding:2px 5px;
+  border-radius:4px;
+}
+
+.bell{
+  cursor:pointer;
+  margin:0 5px;
+}
+
+
+/* ITEMS */
+
+.course-header{
+  background:#eee;
+  padding:3px 6px;
+  font-size:12px;
+  margin-top:4px;
+  cursor:pointer;
+  border-radius:4px;
+}
+
+.item{
+  display:flex;
+  justify-content:space-between;
+  background:#f3f3f3;
+  padding:2px 5px;
+  font-size:12px;
+  margin:2px 0;
+  border-radius:3px;
+}
+
+.item span{
+  cursor:pointer;
+}
+
+.closed{
+  padding:10px;
+  background:#222;
+}
+
+</style>
+</head>
+
+
+<body>
+
+<!-- TABS -->
+
+<div class="tabs">
+  <div class="tab active" id="tab-open" onclick="switchTab('open')">Open Orders</div>
+  <div class="tab" id="tab-closed" onclick="switchTab('closed')">Closed Orders</div>
+</div>
+
+
+<!-- CONTROLS -->
+
+<div class="controls">
+
+  <label>KDS Time:</label>
+  <input type="time" id="simTime" value="12:15">
+
+  <button onclick="render()">Simulate</button>
+
+  <label>
+    <input type="checkbox" id="ackEnabled" checked>
+    Enable ACK
+  </label>
+
+  <label>
+    <input type="checkbox" id="prioritizeRTE" checked>
+    Prioritize RTE
+  </label>
+
+  <label>Status:</label>
+  <select id="filter">
+    <option value="all">All</option>
+    <option value="ready">Ready Only</option>
+  </select>
+
+</div>
+
+
+<!-- OPEN -->
+
+<div id="openView">
+
+  <div id="pendingBucket" class="bucket pending-bucket">
+    <h3>Accept / Reject Orders</h3>
+  </div>
+
+  <div id="readyBucket" class="bucket ready-bucket">
+    <h3>Ready Orders</h3>
+  </div>
+
+  <div id="activeBucket" class="bucket active-bucket">
+    <h3>Preparing / Yet To Start</h3>
+  </div>
+
+</div>
+
+
+<!-- CLOSED -->
+
+<div id="closedView" style="display:none" class="closed"></div>
+
+
+<script>
+
+/* CONSTANTS */
+
+const ICONS={
+  yet:'🕒',
+  cooking:['🔁','🔥'],
+  bumped:'✅',
+  hold:'⏸️'
+};
+
+
+/* DATA */
+
+const OPEN=[];
+const CLOSED=[];
+
+
+/* INIT DATA */
+
+OPEN.push(
+makeSample('C1',true,'normal',[
+ ['App','12:00',['bumped','bumped']],
+ ['Entree','12:10',['yet','yet']]
+]),
+
+makeSample('C2',true,'normal',[
+ ['App','12:02',['yet','cooking']],
+ ['Entree',null,['hold','hold']]
+]),
+
+makeSample('C3',true,'normal',[
+ ['App','12:03',['yet','yet']],
+ ['Entree','12:07',['cooking','yet']]
+]),
+
+makeSample('C4',true,'high',[
+ ['App','12:01',['bumped','bumped']],
+ ['Entree','12:08',['cooking','yet']]
+]),
+
+makeSample('P1',false,'normal',[
+ ['Main',null,['yet','yet']]
+])
+);
+
+
+/* FACTORY */
+
+function makeSample(id,acc,prio,courses){
+
+  return{
+    id,
+    accepted:acc,
+    priority:prio,
+    readyAt:null,
+    courses:courses.map(c=>({
+
+      name:c[0],
+      firedAt:c[1],
+      items:[
+        {name:c[0]+'1',status:c[2][0]},
+        {name:c[0]+'2',status:c[2][1]}
+      ]
+    }))
+  };
+}
+
+
+/* TIME */
+
+function parse(t){
+
+  if(!t) return null;
+
+  const [h,m]=t.split(':').map(Number);
+  return h*60+m;
+}
+
+
+/* STATUS */
+
+function getStatus(c){
+
+  if(!c.accepted) return 'Pending';
+
+  let allYet=true;
+  let allBumped=true;
+  let hasCook=false;
+  let hasHold=false;
+
+  c.courses.forEach(co=>{
+    co.items.forEach(i=>{
+
+      if(i.status!=='yet') allYet=false;
+      if(i.status!=='bumped') allBumped=false;
+      if(i.status==='cooking') hasCook=true;
+      if(i.status==='hold') hasHold=true;
+    });
+  });
+
+  if(allBumped) return 'Ready';
+  if(hasCook||hasHold) return 'Preparing';
+  if(allYet) return 'Yet';
+
+  return 'Preparing';
+}
+
+
+/* EARLIEST UNBUMPED (YOUR LOGIC) */
+
+function getEarliestUnbumped(chit){
+
+  const list=[];
+
+  chit.courses.forEach(c=>{
+
+    c.items.forEach(i=>{
+
+      if(i.status!=='bumped' && i.status!=='hold'){
+
+        const t=parse(c.firedAt);
+
+        if(t!==null) list.push(t);
+      }
+    });
+
+  });
+
+  return list.length?Math.min(...list):9999;
+}
+
+
+/* TAB */
+
+let currentTab='open';
+
+function switchTab(t){
+
+  currentTab=t;
+
+  document.getElementById('openView').style.display=
+    t==='open'?'block':'none';
+
+  document.getElementById('closedView').style.display=
+    t==='closed'?'block':'none';
+
+  document.getElementById('tab-open').classList.toggle('active',t==='open');
+  document.getElementById('tab-closed').classList.toggle('active',t==='closed');
+
+  render();
+}
+
+
+/* CLOSE / REOPEN */
+
+function closeOrder(id){
+
+  const i=OPEN.findIndex(o=>o.id===id);
+
+  if(i>-1){
+
+    CLOSED.push(OPEN[i]);
+    OPEN.splice(i,1);
+  }
+
+  render();
+}
+
+
+function reopen(id){
+
+  const i=CLOSED.findIndex(o=>o.id===id);
+
+  if(i>-1){
+
+    const c=CLOSED[i];
+
+    c.accepted=true;
+    c.readyAt=null;
+
+    c.courses.forEach(co=>{
+      co.items.forEach(i=>i.status='yet');
+    });
+
+    OPEN.push(c);
+    CLOSED.splice(i,1);
+  }
+
+  render();
+}
+
+
+/* RENDER */
+
+function render(){
+
+  if(currentTab==='closed'){
+    renderClosed();
+    return;
+  }
+
+  renderOpen();
+}
+
+
+/* OPEN */
+
+function renderOpen(){
+
+  const pending=document.getElementById('pendingBucket');
+  const ready=document.getElementById('readyBucket');
+  const active=document.getElementById('activeBucket');
+
+  pending.innerHTML='<h3>Accept / Reject Orders</h3>';
+  ready.innerHTML='<h3>Ready Orders</h3>';
+  active.innerHTML='<h3>Preparing / Yet To Start</h3>';
+
+  const time=parse(document.getElementById('simTime').value);
+
+  let p=[],r=[],a=[];
+
+
+  OPEN.forEach(c=>{
+
+    const s=getStatus(c);
+
+    /* FILTER */
+
+    if(
+      document.getElementById('filter').value==='ready' &&
+      s!=='Ready'
+    ) return;
+
+
+    if(s==='Pending') p.push(c);
+    else if(s==='Ready') r.push(c);
+    else a.push(c);
+  });
+
+
+  /* READY SORT */
+
+  r.sort((x,y)=>{
+
+    if(x.priority!==y.priority){
+      return x.priority==='high'?-1:1;
+    }
+
+    return (x.readyAt||0)-(y.readyAt||0);
+  });
+
+
+  /* ACTIVE SORT (INTEGRATED) */
+
+  a.sort((x,y)=>{
+
+    if(x.priority!==y.priority){
+      return x.priority==='high'?-1:1;
+    }
+
+    return getEarliestUnbumped(x)-getEarliestUnbumped(y);
+  });
+
+
+  p.forEach(c=>pending.appendChild(draw(c,time)));
+  r.forEach(c=>ready.appendChild(draw(c,time)));
+  a.forEach(c=>active.appendChild(draw(c,time)));
+}
+
+
+/* CLOSED */
+
+function renderClosed(){
+
+  const box=document.getElementById('closedView');
+
+  box.innerHTML='<h3>Closed Orders</h3>';
+
+  CLOSED.forEach(c=>{
+
+    const d=document.createElement('div');
+    d.className='chit';
+
+    d.innerHTML=`
+      <b>${c.id}</b><br>
+      Priority: ${c.priority}<br><br>
+      <button onclick="reopen('${c.id}')">Reopen</button>
+    `;
+
+    box.appendChild(d);
+  });
+}
+
+
+/* DRAW */
+
+function draw(c,time){
+
+  const d=document.createElement('div');
+  d.className=`chit ${c.priority==='high'?'high':''}`;
+
+  const s=getStatus(c);
+
+
+  /* READY TIME */
+
+  if(s==='Ready' && !c.readyAt){
+    c.readyAt=Date.now();
+  }
+
+  if(s!=='Ready') c.readyAt=null;
+
+
+  /* HEADER */
+
+  const h=document.createElement('div');
+  h.className='chit-header';
+
+  let bell='';
+
+  if(s==='Ready' && document.getElementById('ackEnabled').checked){
+    bell='🔔';
+  }
+
+
+  h.innerHTML=`
+
+  <span>
+    ${c.id}
+    <span class="bell">${bell}</span>
+    <span class="status">${s}</span>
+  </span>
+
+  <select onchange="setPriority('${c.id}',this.value)">
+    <option value="normal" ${c.priority==='normal'?'selected':''}>Normal</option>
+    <option value="high" ${c.priority==='high'?'selected':''}>High</option>
+  </select>
+
+  `;
+
+
+  if(bell){
+    h.querySelector('.bell').onclick=()=>closeOrder(c.id);
+  }
+
+  d.appendChild(h);
+
+
+  /* CONTROLS */
+
+  const ctrl=document.createElement('div');
+
+
+  if(!c.accepted){
+
+    ctrl.innerHTML=`
+      <button onclick="accept('${c.id}')">Accept</button>
+      <button onclick="reject('${c.id}')">Reject</button>
+    `;
+  }
+
+
+  if(c.accepted){
+
+    const sBtn=document.createElement('button');
+    sBtn.textContent='Start';
+
+    sBtn.onclick=()=>start(c.id);
+
+    ctrl.appendChild(sBtn);
+  }
+
+
+  const b=document.createElement('button');
+  b.textContent='Bump';
+
+  b.onclick=()=>bump(c.id);
+
+  ctrl.appendChild(b);
+
+
+  if(
+    s==='Ready' &&
+    !document.getElementById('ackEnabled').checked
+  ){
+
+    const cl=document.createElement('button');
+    cl.textContent='Close';
+
+    cl.onclick=()=>closeOrder(c.id);
+
+    ctrl.appendChild(cl);
+  }
+
+
+  d.appendChild(ctrl);
+
+
+  /* COURSES */
+
+  c.courses.forEach((co,idx)=>{
+
+    const ch=document.createElement('div');
+    ch.className='course-header';
+
+    ch.textContent=
+      `${co.name} — ${co.firedAt||'Hold'}`;
+
+    const body=document.createElement('div');
+
+
+    ch.onclick=()=>{
+      body.style.display=
+        body.style.display==='none'?'block':'none';
+    };
+
+
+    d.appendChild(ch);
+    d.appendChild(body);
+
+
+    co.items.forEach(i=>{
+
+      const row=document.createElement('div');
+      row.className='item';
+
+
+      const since=co.firedAt
+        ?` (${time-parse(co.firedAt)}m)`
+        :'';
+
+
+      const lab=document.createElement('div');
+      lab.textContent=i.name+since;
+
+
+      const ic=document.createElement('div');
+
+
+      if(i.status==='yet'){
+
+        const x=document.createElement('span');
+        x.textContent=ICONS.yet;
+
+        x.onclick=()=>{
+          i.status='cooking';
+          render();
+        };
+
+        ic.appendChild(x);
+      }
+
+
+      else if(i.status==='cooking'){
+
+        const r=document.createElement('span');
+        r.textContent=ICONS.cooking[0];
+
+        r.onclick=()=>{
+          i.status='yet';
+          render();
+        };
+
+        const bb=document.createElement('span');
+        bb.textContent=ICONS.cooking[1];
+
+        bb.onclick=()=>{
+          i.status='bumped';
+          render();
+        };
+
+        ic.appendChild(r);
+        ic.appendChild(bb);
+      }
+
+
+      else if(i.status==='bumped'){
+
+        const y=document.createElement('span');
+        y.textContent=ICONS.bumped;
+
+        y.onclick=()=>{
+          i.status='cooking';
+          render();
+        };
+
+        ic.appendChild(y);
+      }
+
+
+      else if(i.status==='hold'){
+
+        const h=document.createElement('span');
+        h.textContent=ICONS.hold;
+
+        ic.appendChild(h);
+      }
+
+
+      row.appendChild(lab);
+      row.appendChild(ic);
+
+      body.appendChild(row);
+    });
+
+  });
+
+
+  return d;
+}
+
+
+/* ACTIONS */
+
+function accept(id){
+
+  const c=OPEN.find(x=>x.id===id);
+
+  c.accepted=true;
+
+  render();
+}
+
+
+function reject(id){
+
+  closeOrder(id);
+}
+
+
+function start(id){
+
+  const c=OPEN.find(x=>x.id===id);
+
+  c.courses.forEach(co=>{
+    co.items.forEach(i=>{
+      if(i.status==='yet') i.status='cooking';
+    });
+  });
+
+  render();
+}
+
+
+function bump(id){
+
+  const c=OPEN.find(x=>x.id===id);
+
+  c.courses.forEach(co=>{
+    co.items.forEach(i=>{
+
+      if(i.status!=='bumped' && i.status!=='hold'){
+        i.status='bumped';
+      }
+
+    });
+  });
+
+
+  if(
+    getStatus(c)==='Ready' &&
+    !document.getElementById('ackEnabled').checked
+  ){
+    closeOrder(id);
+    return;
+  }
+
+  render();
+}
+
+
+function setPriority(id,v){
+
+  const c=OPEN.find(x=>x.id===id);
+
+  if(c) c.priority=v;
+
+  render();
+}
+
+
+/* INIT */
+
+render();
+
+</script>
+
+</body>
+</html>
