@@ -154,7 +154,14 @@ button,select,input{
 <!-- CONTROLS -->
 
 <div class="controls">
-
+  <span style="
+    color:#ffcc00;
+    font-size:12px;
+    margin-right:12px;
+  ">
+    ⚠️ Buckets are for internal visualization only. 
+    In real-time KDS, chits appear together.
+  </span>
   <label>KDS Time:</label>
   <input type="time" id="simTime" value="12:15">
 
@@ -577,13 +584,15 @@ function draw(c,time){
   }
 
 
+if(c.accepted){
+
   const b=document.createElement('button');
   b.textContent='Bump';
 
   b.onclick=()=>bump(c.id);
 
   ctrl.appendChild(b);
-
+}
 
   if(
     s==='Ready' &&
@@ -752,6 +761,8 @@ function bump(id){
 
   const c=OPEN.find(x=>x.id===id);
 
+  let wasReady = getStatus(c)==='Ready';
+
   c.courses.forEach(co=>{
     co.items.forEach(i=>{
 
@@ -762,6 +773,10 @@ function bump(id){
     });
   });
 
+  // If order just became Ready, capture bump time
+  if(!wasReady && getStatus(c)==='Ready'){
+    c.readyAt = Date.now();
+  }
 
   if(
     getStatus(c)==='Ready' &&
@@ -773,6 +788,7 @@ function bump(id){
 
   render();
 }
+
 
 
 function setPriority(id,v){
