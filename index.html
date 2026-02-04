@@ -420,30 +420,81 @@ function render(){
 
 function renderOpen(){
 
-  const pending=document.getElementById('pendingBucket');
-  const ready=document.getElementById('readyBucket');
-  const active=document.getElementById('activeBucket');
+  const pending = document.getElementById('pendingBucket');
+  const ready   = document.getElementById('readyBucket');
+  const active  = document.getElementById('activeBucket');
 
-  pending.innerHTML='<h3>Accept / Reject Orders</h3>';
-  ready.innerHTML='<h3>Ready Orders</h3>';
-  active.innerHTML='<h3>Preparing / Yet To Start</h3>';
+  const prioritize =
+    document.getElementById('prioritizeRTE').checked;
 
-  const time=parse(document.getElementById('simTime').value);
+  const time = parse(document.getElementById('simTime').value);
 
-  let p=[],r=[],a=[];
+  // Clear
+  pending.innerHTML = '<h3>Accept / Reject Orders</h3>';
+  ready.innerHTML   = '<h3>Ready Orders</h3>';
+  active.innerHTML  = '<h3>Preparing / Yet To Start</h3>';
+
+  let p = [], r = [], a = [];
+
+
+  /* ================================
+     MODE 1: RTE OFF → SINGLE VIEW
+     ================================ */
+
+  if(!prioritize){
+
+    // Hide other buckets
+    ready.style.display  = 'none';
+    active.style.display = 'none';
+
+    // Use pending bucket as main container
+    pending.style.display = 'block';
+    pending.innerHTML = '<h3>All Orders</h3>';
+
+    OPEN.forEach(c=>{
+
+      const s = getStatus(c);
+
+      // Filter still respected
+      if(
+        document.getElementById('filter').value==='ready' &&
+        s!=='Ready'
+      ) return;
+
+      if(s === 'Pending'){
+        p.push(c);
+      }else{
+        a.push(c); // everything else
+      }
+    });
+
+
+    // Render: Pending first
+    p.forEach(c=>pending.appendChild(draw(c,time)));
+    a.forEach(c=>pending.appendChild(draw(c,time)));
+
+    return;
+  }
+
+
+  /* ================================
+     MODE 2: RTE ON → NORMAL FLOW
+     ================================ */
+
+  // Show all buckets
+  pending.style.display = 'block';
+  ready.style.display   = 'block';
+  active.style.display  = 'block';
 
 
   OPEN.forEach(c=>{
 
-    const s=getStatus(c);
-
-    /* FILTER */
+    const s = getStatus(c);
 
     if(
       document.getElementById('filter').value==='ready' &&
       s!=='Ready'
     ) return;
-
 
     if(s==='Pending') p.push(c);
     else if(s==='Ready') r.push(c);
@@ -456,19 +507,19 @@ function renderOpen(){
   r.sort((x,y)=>{
 
     if(x.priority!==y.priority){
-      return x.priority==='high'?-1:1;
+      return x.priority==='high' ? -1 : 1;
     }
 
     return (x.readyAt||0)-(y.readyAt||0);
   });
 
 
-  /* ACTIVE SORT (INTEGRATED) */
+  /* ACTIVE SORT */
 
   a.sort((x,y)=>{
 
     if(x.priority!==y.priority){
-      return x.priority==='high'?-1:1;
+      return x.priority==='high' ? -1 : 1;
     }
 
     return getEarliestUnbumped(x)-getEarliestUnbumped(y);
@@ -479,6 +530,7 @@ function renderOpen(){
   r.forEach(c=>ready.appendChild(draw(c,time)));
   a.forEach(c=>active.appendChild(draw(c,time)));
 }
+
 
 
 /* CLOSED */
